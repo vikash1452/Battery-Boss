@@ -179,6 +179,9 @@ class OfflineVoiceAssistant(
         scope.launch {
             playbackEngine.lastErrorText.collect { refreshDiagnosticsSnapshot() }
         }
+        scope.launch {
+            playbackEngine.lastTraceRecord.collect { refreshDiagnosticsSnapshot() }
+        }
     }
 
     private fun initializeTts() {
@@ -226,12 +229,22 @@ class OfflineVoiceAssistant(
     fun refreshDiagnosticsSnapshot() {
         val activePreset = latestSettings.activePreset
         val effectiveGain = volumeController.getEffectiveGain(false)
+        val trackStreamGain = volumeController.getAudioTrackStreamGain(isPcm16SoftwareScaled = true, isPreviewOrTest = false)
+        val trace = playbackEngine.lastTraceRecord.value
+        val hasTrace = trace.entryPoint != "None"
+        val defaultEnginePkg = runCatching { tts?.defaultEngine ?: "System Default TTS" }
+            .getOrDefault("System Default TTS")
+        val mediaVolPct = focusController.readSystemMediaVolumePercent()
+        val a11yEnabled = focusController.isOsAccessibilityServiceEnabled()
+
         _audioDiagnostics.value = AudioDiagnosticsState(
             selectedVoiceLabel = "${activePreset.title} • ${activePreset.piperModelId}",
+            selectedTtsEnginePackage = if (hasTrace) trace.selectedTtsEngine else defaultEnginePkg,
             playbackEngineLabel = playbackEngine.playbackEngineLabel.value,
             independentVolumeEnabled = latestSettings.independentVolumeEnabled,
             independentVolumePercent = (latestSettings.voiceVolume * 100).roundToInt(),
             effectiveGainValue = effectiveGain,
+            audioTrackStreamGainValue = trackStreamGain,
             playbackState = playbackEngine.playbackStateLabel.value,
             audioFocusState = focusController.audioFocusStateText.value,
             mediaDuckingLevel = latestSettings.mediaDuckingLevel.label,
@@ -240,7 +253,23 @@ class OfflineVoiceAssistant(
             queueSize = currentQueueSize,
             queueSummary = currentQueueSummary,
             callOrAlarmState = focusController.callOrAlarmStateText.value,
-            lastPlaybackError = playbackEngine.lastErrorText.value
+            lastPlaybackError = playbackEngine.lastErrorText.value,
+            lastTraceEntryPoint = trace.entryPoint,
+            synthesizeToFileSucceeded = if (hasTrace) trace.synthesizeToFileSucceeded else null,
+            pcmWavDecoded = if (hasTrace) trace.pcmWavDecoded else null,
+            decodedWavFormatSummary = trace.decodedWavFormatSummary,
+            audioTrackCreated = if (hasTrace) trace.audioTrackCreated else null,
+            actualAudioAttributesUsage = if (latestSettings.independentVolumeEnabled) {
+                "USAGE_ASSISTANCE_ACCESSIBILITY (11)"
+            } else {
+                "USAGE_MEDIA (1)"
+            },
+            actualAudioAttributesContentType = "CONTENT_TYPE_SPEECH (1)",
+            audioTrackPlaybackState = if (hasTrace) trace.audioTrackPlaybackState else "Idle",
+            directTtsFallbackUsed = if (hasTrace) trace.directTtsFallbackUsed else false,
+            systemMediaVolumePercent = mediaVolPct,
+            isAccessibilityServiceEnabledOnOs = a11yEnabled,
+            osStreamRoutingLimitationNote = focusController.buildOsStreamRoutingNote()
         )
     }
 
@@ -779,11 +808,15 @@ class OfflineVoiceAssistant(
             engine.setPitch(effectivePitch)
             engine.setSpeechRate(effectiveSpeed)
 
-            playbackEngine.synthesizeAndPlayItem(
+            val ok = playbackEngine.synthesizeAndPlayItem(
                 tts = engine,
                 item = item,
-                naturalProsodyEnabled = latestSettings.naturalProsodyEnabled
+                naturalProsodyEnabled = latestSettings.naturalProsodyEnabled,
+                systemMediaVolumePercent = focusController.readSystemMediaVolumePercent()
             )
+            if (!ok && latestSettings.independentVolumeEnabled) {
+                _lastSpokenBanner.value = VoicePlaybackEngine.ERROR_INDEPENDENT_PLAYBACK_UNAVAILABLE
+            }
         } finally {
             _isSpeaking.value = false
             _previewingPreset.value = null

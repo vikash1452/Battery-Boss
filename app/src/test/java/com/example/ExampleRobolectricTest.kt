@@ -253,6 +253,93 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `wav decoder parses RIFF chunks and Independent Mode disables direct TTS fallback with explicit error`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val tempWav = java.io.File(context.cacheDir, "test_junk_fmt_data.wav")
+        try {
+            // Build a valid RIFF WAVE file containing a 12-byte JUNK chunk before fmt and 64 bytes of 16-bit PCM data
+            val pcmPayload = ByteArray(64) { (it % 10).toByte() }
+            val totalRiffSize = 4 + (8 + 12) + (8 + 16) + (8 + pcmPayload.size)
+            val buf = ByteBuffer.allocate(8 + totalRiffSize).order(ByteOrder.LITTLE_ENDIAN)
+            buf.put("RIFF".toByteArray(Charsets.US_ASCII))
+            buf.putInt(totalRiffSize)
+            buf.put("WAVE".toByteArray(Charsets.US_ASCII))
+            // JUNK chunk
+            buf.put("JUNK".toByteArray(Charsets.US_ASCII))
+            buf.putInt(12)
+            buf.put(ByteArray(12))
+            // fmt chunk (PCM=1, Mono=1, 22050 Hz, 16-bit)
+            buf.put("fmt ".toByteArray(Charsets.US_ASCII))
+            buf.putInt(16)
+            buf.putShort(1) // PCM
+            buf.putShort(1) // Mono
+            buf.putInt(22050)
+            buf.putInt(22050 * 2)
+            buf.putShort(2)
+            buf.putShort(16)
+            // data chunk
+            buf.put("data".toByteArray(Charsets.US_ASCII))
+            buf.putInt(pcmPayload.size)
+            buf.put(pcmPayload)
+            tempWav.writeBytes(buf.array())
+
+            val decoded = com.example.audio.VoicePlaybackEngine.decodeRiffWavHeader(tempWav)
+            org.junit.Assert.assertNotNull(decoded)
+            assertEquals(1, decoded!!.audioFormatCode)
+            assertEquals(1, decoded.channels)
+            assertEquals(22050, decoded.sampleRateHz)
+            assertEquals(16, decoded.bitsPerSample)
+            assertEquals(64L, decoded.dataSizeBytes)
+
+            // Verify that when synthesizeToFile does not produce a WAV file in Independent Mode,
+            // direct TextToSpeech.speak() fallback is NEVER used and the exact error is reported.
+            val volController = IndependentVoiceController()
+            volController.updateConfiguration(volume = 1.0f, independentEnabled = true, applyToAll = true)
+            val engine = com.example.audio.VoicePlaybackEngine(context, volController)
+            val dummyTts = android.speech.tts.TextToSpeech(context) {}
+            val testItem = QueuedVoiceAnnouncement(
+                eventType = "Voice Test",
+                rawMessage = "Hello Boss",
+                clauses = listOf("Hello Boss"),
+                priority = AnnouncementPriority.IMPORTANT,
+                preset = VoiceProfilePreset.ENGLISH_FEMALE,
+                speed = 1.0f,
+                pitch = 1.0f,
+                isPreviewOrTest = true
+            )
+
+            kotlinx.coroutines.runBlocking {
+                // Since Robolectric ShadowTextToSpeech does not write a real WAV file on disk,
+                // synthesizeToFile will fail the WAV file existence check after synthesizeTimeoutMs
+                val result = engine.synthesizeAndPlayItem(
+                    tts = dummyTts,
+                    item = testItem,
+                    naturalProsodyEnabled = true,
+                    systemMediaVolumePercent = 50,
+                    synthesizeTimeoutMs = 150L
+                )
+                assertFalse(result)
+                assertFalse(engine.lastTraceRecord.value.directTtsFallbackUsed)
+                assertEquals(
+                    "Independent Voice Playback Unavailable – TTS fallback is disabled.",
+                    engine.lastErrorText.value
+                )
+                assertEquals(
+                    "USAGE_ASSISTANCE_ACCESSIBILITY (11)",
+                    engine.lastTraceRecord.value.actualAudioAttributesUsage
+                )
+                assertEquals(
+                    "CONTENT_TYPE_SPEECH (1)",
+                    engine.lastTraceRecord.value.actualAudioAttributesContentType
+                )
+            }
+            dummyTts.shutdown()
+        } finally {
+            tempWav.delete()
+        }
+    }
+
+    @Test
     fun `compose UI navigates across tabs and displays Independent Voice Volume Control and Audio Diagnostics`() {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("dashboard_screen").assertIsDisplayed()

@@ -182,14 +182,37 @@ enum class AnnouncementRepeatPolicy(val label: String, val description: String) 
 }
 
 /**
+ * Detailed trace record captured for every announcement playback attempt.
+ */
+data class PlaybackTraceRecord(
+    val timestampMillis: Long = System.currentTimeMillis(),
+    val entryPoint: String = "None",
+    val selectedTtsEngine: String = "N/A",
+    val synthesizeToFileSucceeded: Boolean = false,
+    val pcmWavDecoded: Boolean = false,
+    val decodedWavFormatSummary: String = "N/A",
+    val audioTrackCreated: Boolean = false,
+    val actualAudioAttributesUsage: String = "USAGE_ASSISTANCE_ACCESSIBILITY (11)",
+    val actualAudioAttributesContentType: String = "CONTENT_TYPE_SPEECH (1)",
+    val audioTrackPlaybackState: String = "PLAYSTATE_STOPPED (1)",
+    val directTtsFallbackUsed: Boolean = false,
+    val effectivePcmGain: Float = 1.0f,
+    val audioTrackStreamGain: Float = 1.0f,
+    val systemMediaVolumePercent: Int? = null,
+    val errorOrLimitation: String = "None"
+)
+
+/**
  * Real-time state exposed to the Audio Diagnostics Screen.
  */
 data class AudioDiagnosticsState(
     val selectedVoiceLabel: String = "Hindi Female • hi_IN-priyamvada-medium",
-    val playbackEngineLabel: String = "SynthesizeToFile -> AudioTrack PCM (Independent Gain)",
+    val selectedTtsEnginePackage: String = "Default System TTS",
+    val playbackEngineLabel: String = "SynthesizeToFile -> AudioTrack PCM (Direct TTS Disabled)",
     val independentVolumeEnabled: Boolean = true,
     val independentVolumePercent: Int = 100,
     val effectiveGainValue: Float = 1.0f,
+    val audioTrackStreamGainValue: Float = 1.0f,
     val playbackState: String = "Idle",
     val audioFocusState: String = "Idle (No Active Focus Request)",
     val mediaDuckingLevel: String = "MEDIUM",
@@ -198,7 +221,20 @@ data class AudioDiagnosticsState(
     val queueSize: Int = 0,
     val queueSummary: String = "Queue Empty (0 pending)",
     val callOrAlarmState: String = "Normal (No Call/Alarm Active)",
-    val lastPlaybackError: String = "None"
+    val lastPlaybackError: String = "None",
+    // Trace & Routing Verification Fields
+    val lastTraceEntryPoint: String = "None (Run Test Voice or Connect Charger)",
+    val synthesizeToFileSucceeded: Boolean? = null,
+    val pcmWavDecoded: Boolean? = null,
+    val decodedWavFormatSummary: String = "N/A",
+    val audioTrackCreated: Boolean? = null,
+    val actualAudioAttributesUsage: String = "USAGE_ASSISTANCE_ACCESSIBILITY (11)",
+    val actualAudioAttributesContentType: String = "CONTENT_TYPE_SPEECH (1)",
+    val audioTrackPlaybackState: String = "Idle",
+    val directTtsFallbackUsed: Boolean = false,
+    val systemMediaVolumePercent: Int? = null,
+    val isAccessibilityServiceEnabledOnOs: Boolean = false,
+    val osStreamRoutingLimitationNote: String = "Awaiting hardware audio routing inspection"
 )
 
 /**

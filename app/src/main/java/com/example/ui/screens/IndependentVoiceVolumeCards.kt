@@ -222,9 +222,9 @@ fun IndependentVoiceVolumeCard(
                     )
                     Text(
                         text = if (settings.independentVolumeEnabled) {
-                            "Independent Mode Active: Battery Boss controls its own 16-bit PCM sample amplitude (0.00–1.00, default 100%) on USAGE_ASSISTANCE_ACCESSIBILITY with AudioTrack locked at 1.0f unity gain (never applying gain twice and never modifying Android hardware volume sliders)."
+                            "Independent PCM Mode Active (Direct TTS Disabled): Speech is synthesized to WAV via synthesizeToFile(), decoded to 16-bit PCM, scaled in a single stage (0.00–1.00, default 100%), and played via AudioTrack (USAGE_ASSISTANCE_ACCESSIBILITY, AudioTrack gain locked at 1.0f). Note: On Android devices without an active AccessibilityService, the OS AudioPolicyManager routes USAGE_ASSISTANCE_ACCESSIBILITY through the hardware STREAM_MUSIC (Media Volume) master attenuator."
                         } else {
-                            "Fallback Mode Active (Independent Mode Disabled): Battery Boss routes audio via standard USAGE_MEDIA stream with relative Bundle gain. Limitation: Spoken loudness will scale with the device's system Media volume slider and will be muted if Media volume is at 0%."
+                            "Fallback Mode Active (Independent Mode Disabled): Battery Boss routes audio via standard USAGE_MEDIA stream with relative Bundle gain. Limitation: Spoken loudness scales with the device's system Media volume slider and is muted if Media volume is at 0%."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
@@ -543,18 +543,7 @@ fun IndependentVoiceVolumeCard(
 }
 
 /**
- * Section 10 & 11: Audio Diagnostics Screen / Card + Android Audio Limitations Disclosure
- *
- * Displays real-time non-fabricated diagnostics:
- * - Current selected voice (hi_IN-priyamvada-medium, hi_IN-rohan-medium, en_US-lessac-medium, en_US-ryan-medium)
- * - Current playback engine
- * - Independent volume percentage
- * - Playback state
- * - Audio focus state
- * - Selected audio output device (N/A if unavailable)
- * - Current announcement priority
- * - Queue status
- * - Last playback error
+ * Section 10 & 11: Audio Diagnostics & Playback Trace Card + Honest Android OS Stream Routing Disclosure
  */
 @Composable
 fun AudioDiagnosticsCard(
@@ -595,13 +584,13 @@ fun AudioDiagnosticsCard(
                     )
                     Column {
                         Text(
-                            text = "VOICE & AUDIO DIAGNOSTICS",
+                            text = "VOICE & AUDIO TRACE DIAGNOSTICS",
                             style = MaterialTheme.typography.titleMedium,
                             color = TextPrimary,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Live BatteryBossAudioManager Telemetry (No simulated values)",
+                            text = "Live Playback Pipeline Trace & OS Routing Inspection",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -625,14 +614,64 @@ fun AudioDiagnosticsCard(
                 }
             }
 
+            if (diagnostics.lastPlaybackError != "None") {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = ThermalCrimson.copy(alpha = 0.16f),
+                    border = BorderStroke(1.5.dp, ThermalCrimson),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("independent_playback_error_banner")
+                ) {
+                    Text(
+                        text = diagnostics.lastPlaybackError,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ThermalCrimson,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
+            val synthStatus = when (diagnostics.synthesizeToFileSucceeded) {
+                null -> "Awaiting First Utterance"
+                true -> "Yes (WAV Synthesized)"
+                false -> "FAILED (Direct TTS Disabled)"
+            }
+            val wavDecodeStatus = when (diagnostics.pcmWavDecoded) {
+                null -> "Awaiting First Utterance"
+                true -> "Yes (${diagnostics.decodedWavFormatSummary})"
+                false -> "FAILED"
+            }
+            val trackCreatedStatus = when (diagnostics.audioTrackCreated) {
+                null -> "Awaiting First Utterance"
+                true -> "Yes (STATE_INITIALIZED)"
+                false -> "FAILED"
+            }
+            val fallbackStatus = if (diagnostics.independentVolumeEnabled) {
+                "false (Strictly Disabled in Independent Mode)"
+            } else {
+                diagnostics.directTtsFallbackUsed.toString()
+            }
+
             val rows = listOf(
                 "Current Selected Voice" to diagnostics.selectedVoiceLabel,
+                "Selected TTS Engine" to diagnostics.selectedTtsEnginePackage,
                 "Current Playback Engine" to diagnostics.playbackEngineLabel,
-                "Independent Volume Mode" to if (diagnostics.independentVolumeEnabled) "ENABLED (Dedicated AudioTrack PCM)" else "DISABLED (System Fallback)",
-                "Independent Volume Percentage" to "${diagnostics.independentVolumePercent}% (${String.format(Locale.US, "%.2f", diagnostics.effectiveGainValue)} Gain)",
+                "Last Traced Entry Point" to diagnostics.lastTraceEntryPoint,
+                "synthesizeToFile() Succeeded" to synthStatus,
+                "PCM WAV Decoded" to wavDecodeStatus,
+                "AudioTrack Created" to trackCreatedStatus,
+                "Actual AudioAttributes Usage" to diagnostics.actualAudioAttributesUsage,
+                "Actual Content Type" to diagnostics.actualAudioAttributesContentType,
+                "AudioTrack Playback State" to diagnostics.audioTrackPlaybackState,
+                "Direct TTS.speak() Fallback Used" to fallbackStatus,
+                "Effective PCM Gain (Single-Stage)" to "${diagnostics.independentVolumePercent}% (${String.format(Locale.US, "%.2f", diagnostics.effectiveGainValue)} Gain)",
+                "AudioTrack Stream Gain" to "${String.format(Locale.US, "%.2f", diagnostics.audioTrackStreamGainValue)} (Unity = No Double Gain)",
+                "System Media Volume (STREAM_MUSIC)" to (diagnostics.systemMediaVolumePercent?.let { "$it% (Read-Only OS Stream)" } ?: "N/A"),
+                "OS AccessibilityService Active" to if (diagnostics.isAccessibilityServiceEnabledOnOs) "Yes (STREAM_ACCESSIBILITY Active)" else "No (OS Routes via STREAM_MUSIC)",
                 "Playback State" to diagnostics.playbackState,
                 "Audio Focus State" to diagnostics.audioFocusState,
-                "Media Ducking Policy" to diagnostics.mediaDuckingLevel,
                 "Selected Audio Output Device" to diagnostics.outputDeviceName.ifBlank { "N/A" },
                 "Current Announcement Priority" to diagnostics.currentPriorityLabel,
                 "Queue Status" to diagnostics.queueSummary,
@@ -663,27 +702,28 @@ fun AudioDiagnosticsCard(
                                 text = label,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary,
-                                modifier = Modifier.weight(0.45f)
+                                modifier = Modifier.weight(0.46f)
                             )
                             Text(
                                 text = value,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = when {
                                     value == "N/A" -> TextMuted
-                                    label == "Last Playback Error" && value != "None" -> AmberWarning
-                                    label == "Independent Volume Percentage" -> EmeraldCharge
-                                    label == "Current Selected Voice" -> ElectricCyan
+                                    label == "Last Playback Error" && value != "None" -> ThermalCrimson
+                                    label.startsWith("Effective PCM Gain") -> EmeraldCharge
+                                    label == "Direct TTS.speak() Fallback Used" -> ElectricCyan
+                                    label == "OS AccessibilityService Active" && !diagnostics.isAccessibilityServiceEnabledOnOs -> AmberWarning
                                     else -> TextPrimary
                                 },
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(0.55f)
+                                modifier = Modifier.weight(0.54f)
                             )
                         }
                     }
                 }
             }
 
-            // Verification Actions for Testing Scenarios 1-10
+            // Verification Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -725,11 +765,11 @@ fun AudioDiagnosticsCard(
                 }
             }
 
-            // Section 11: Android Audio Limitations Disclosure
+            // Honest Android OS & OEM Stream Routing Limitation Disclosure
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = NavySurfaceElevated,
-                border = BorderStroke(1.dp, NavyCardBorder),
+                border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.6f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -743,20 +783,24 @@ fun AudioDiagnosticsCard(
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = "Android Audio Architecture Notes",
-                            tint = PurpleVoiceAccent,
+                            tint = AmberWarning,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "ANDROID AUDIO ARCHITECTURE & LIMITATIONS",
+                            text = "HONEST ANDROID OS & OEM STREAM ROUTING DISCLOSURE",
                             style = MaterialTheme.typography.labelSmall,
-                            color = PurpleVoiceAccent,
+                            color = AmberWarning,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     Text(
-                        text = "• Independent Application Gain vs Hardware Stream: Battery Boss scales 16-bit PCM samples in software (0.00–1.00) and routes via USAGE_ASSISTANCE_ACCESSIBILITY so changing Media, Alarm, Ringtone, or Notification sliders never alters Battery Boss's configured voice gain.\n" +
-                            "• Android Audio Focus & Calls: Active voice calls (MODE_IN_CALL / MODE_IN_COMMUNICATION) and system alarms automatically pause or defer announcements for safety.\n" +
-                            "• OEM & DND Policies: On devices with strict OEM hardware master mute or Do Not Disturb policies, hardware DAC output remains governed by the Android OS kernel.",
+                        text = diagnostics.osStreamRoutingLimitationNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "• Why Media Volume Still Affects Output Without AccessibilityService: In AOSP AudioPolicyManager (Engine.cpp), AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY (11) is mapped to a separate STREAM_ACCESSIBILITY volume curve ONLY when an Android AccessibilityService (e.g., TalkBack/Select-to-Speak) is enabled on the device (and supported by the OEM ROM). Otherwise, the Android OS kernel mixer routes USAGE_ASSISTANCE_ACCESSIBILITY through STREAM_MUSIC (Media Volume).\n" +
+                            "• What Battery Boss Controls Independently: Battery Boss never calls TextToSpeech.speak() in Independent Mode and never modifies system volume sliders. It controls the 16-bit PCM digital gain (0%–100%) in a single stage with AudioTrack.setVolume(1.0f), multiplied prior to the Android OS hardware stream attenuator.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
